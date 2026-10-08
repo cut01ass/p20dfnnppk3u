@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>连通性测试</title>
+<style>
+  :root { color-scheme: light; --fg:#1d1d1f; --mute:#6e6e73; --line:#d2d2d7; --ok:#1d7d3a; --bad:#a1260d; --bg:#fbfbfd; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    font-size:17px; line-height:1.55; }
+  main { max-width:640px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:32px 0 8px; }
+  .mute { color:var(--mute); font-size:15px; }
+  table { width:100%; border-collapse:collapse; font-size:15px; }
+  td { padding:8px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td:first-child { width:42%; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .wait { color:var(--mute); }
+  img.hero { width:100%; height:auto; display:block; border-radius:8px; background:#ddd; }
+  textarea { width:100%; height:200px; font:13px/1.4 ui-monospace, monospace; padding:8px; border:1px solid var(--line); border-radius:8px; }
+  button { font-size:17px; padding:12px 20px; border-radius:10px; border:0; background:#1d1d1f; color:#fff; margin-top:8px; }
+  /* 滚动演示 */
+  .stage { position:relative; height:220vh; margin-top:16px; }
+  .pin { position:sticky; top:0; height:100vh; display:flex; align-items:center; justify-content:center;
+    background:#1d1d1f; color:#f5f5f7; border-radius:12px; overflow:hidden; }
+  .pin .big { font-size:44px; font-weight:700; text-align:center; transition:transform .1s linear; }
+  .bar { position:absolute; left:0; bottom:0; height:6px; width:100%; background:#d4a24a; transform-origin:0 50%; transform:scaleX(0); }
+  @supports (animation-timeline: view()) {
+    .bar { animation: grow linear both; animation-timeline: view(); animation-range: contain; }
+    @keyframes grow { to { transform:scaleX(1); } }
+  }
+  .fade { opacity:0; transform:translateY(24px); transition:opacity .6s ease, transform .6s ease; margin:40vh 0; font-size:22px; }
+  .fade.in { opacity:1; transform:none; }
+  @media (prefers-reduced-motion: reduce) {
+    .fade { opacity:1; transform:none; transition:none; }
+    .bar { animation:none !important; transform:scaleX(1); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>连通性测试</h1>
+  <p class="mute">这不是正式页面. 打开后等十几秒, 让下面的表格跑完, 然后点最下面的"复制结果"发回来, 或者整页截图.</p>
+
+  <h2>这个页面</h2>
+  <table id="t-page"></table>
+
+  <h2>图片下载(237 KB)</h2>
+  <img class="hero" id="hero" alt="测试图" width="1600" height="1066">
+  <table id="t-img"></table>
+
+  <h2>天气接口(从你手机直连)</h2>
+  <table id="t-wx"></table>
+
+  <h2>其他托管地址(从你手机直连)</h2>
+  <table id="t-hosts"></table>
+
+  <h2>浏览器能力</h2>
+  <table id="t-cap"></table>
+
+  <h2>滚动演示</h2>
+  <p class="mute">往下滑: 黑框会钉住不动, 框里的字随滑动放大, 底下的金色条随滑动变长; 再往下几段文字会依次淡入. 滑起来卡不卡, 回来告诉我.</p>
+  <div class="stage" id="stage">
+    <div class="pin"><div class="big" id="big">西安<br>10/18 - 10/23</div><div class="bar"></div></div>
+  </div>
+  <p class="fade">第一段: 淡入.</p>
+  <p class="fade">第二段: 淡入.</p>
+  <p class="fade">第三段: 淡入.</p>
+
+  <h2>结果</h2>
+  <textarea id="out" readonly></textarea>
+  <button id="copy" type="button">复制结果</button>
+  <p class="mute" id="copied"></p>
+</main>
+<script src="hosts.js"></script>
+<script>
+(function () {
+  var T0 = performance.now();
+  var lines = [];
+  var KEY = (location.hash.match(/k=([0-9a-f]{32})/) || [])[1] || '';
+  // 其他托管地址, 部署后填
+  var HOSTS = window.PROBE_HOSTS || [];
+
+  function row(tableId, label, html, cls) {
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + label + '</td><td class="' + (cls || '') + '">' + html + '</td>';
+    document.getElementById(tableId).appendChild(tr);
+    return tr.lastChild;
+  }
+  function log(s) { lines.push(s); document.getElementById('out').value = lines.join('\n'); }
+  function fmt(ms) { return (ms / 1000).toFixed(2) + ' 秒'; }
+
+  function timeout(p, ms) {
+    return new Promise(function (res, rej) {
+      var t = setTimeout(function () { rej(new Error('超时 ' + ms / 1000 + ' 秒')); }, ms);
+      p.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); });
+    });
+  }
+
+  // 1. 页面本身
+  log('host: ' + location.host);
+  log('UA: ' + navigator.userAgent);
+  var conn = navigator.connection || {};
+  row('t-page', '地址', location.host);
+  row('t-page', '网络类型', (conn.effectiveType || '浏览器不报') + (conn.type ? ' / ' + conn.type : ''));
+  log('net: ' + (conn.effectiveType || '-') + ' ' + (conn.type || ''));
+  row('t-page', '微信内', /MicroMessenger/i.test(navigator.userAgent) ? '是' : '否');
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      var n = (performance.getEntriesByType && performance.getEntriesByType('navigation')[0]) || null;
+      var ttfb, dcl, load;
+      if (n) { ttfb = n.responseStart; dcl = n.domContentLoadedEventEnd; load = n.loadEventEnd || performance.now(); }
+      else { var t = performance.timing; ttfb = t.responseStart - t.navigationStart; dcl = t.domContentLoadedEventEnd - t.navigationStart; load = t.loadEventEnd - t.navigationStart; }
+      row('t-page', '首字节', fmt(ttfb));
+      row('t-page', '文字可见(DOMContentLoaded)', fmt(dcl));
+      row('t-page', '全部加载完(含图片)', fmt(load));
+      log('page: ttfb=' + Math.round(ttfb) + 'ms dcl=' + Math.round(dcl) + 'ms load=' + Math.round(load) + 'ms');
+    }, 0);
+  });
+
+  // 2. 图片
+  var img = document.getElementById('hero');
+  var i0 = performance.now();
+  var imgCell = row('t-img', '耗时', '加载中', 'wait');
+  img.onload = function () {
+    var ms = performance.now() - i0;
+    imgCell.textContent = fmt(ms) + ' (约 ' + Math.round(237 * 8 / (ms / 1000)) + ' kbit/s)';
+    imgCell.className = 'ok';
+    log('img237KB: ' + Math.round(ms) + 'ms');
+  };
+  img.onerror = function () { imgCell.textContent = '失败'; imgCell.className = 'bad'; log('img: FAIL'); };
+  img.src = 'hero.jpg?t=' + Date.now();
+
+  // 3. 天气接口
+  var WX = [
+    { name: 'Open-Meteo 西安', url: 'https://api.open-meteo.com/v1/forecast?latitude=34.26&longitude=108.94&daily=temperature_2m_max,temperature_2m_min,sunset&timezone=Asia%2FShanghai&forecast_days=1',
+      pick: function (j) { return j.daily.temperature_2m_min[0] + '~' + j.daily.temperature_2m_max[0] + '°C 日落 ' + j.daily.sunset[0].slice(11); } },
+    { name: 'Open-Meteo 丹东', url: 'https://api.open-meteo.com/v1/forecast?latitude=40.12&longitude=124.38&daily=temperature_2m_max,temperature_2m_min&timezone=Asia%2FShanghai&forecast_days=1',
+      pick: function (j) { return j.daily.temperature_2m_min[0] + '~' + j.daily.temperature_2m_max[0] + '°C'; } },
+    { name: 'wttr.in 西安', url: 'https://wttr.in/Xian?format=j1',
+      pick: function (j) { var w = j.weather[0]; return w.mintempC + '~' + w.maxtempC + '°C'; } }
+  ];
+  if (KEY) {
+    WX.push({ name: '高德 西安', url: 'https://restapi.amap.com/v3/weather/weatherInfo?city=610100&extensions=all&key=' + KEY,
+      pick: function (j) { var c = j.forecasts[0].casts[0]; return c.nighttemp + '~' + c.daytemp + '°C ' + c.dayweather; } });
+    WX.push({ name: '高德 丹东', url: 'https://restapi.amap.com/v3/weather/weatherInfo?city=210600&extensions=all&key=' + KEY,
+      pick: function (j) { var c = j.forecasts[0].casts[0]; return c.nighttemp + '~' + c.daytemp + '°C ' + c.dayweather; } });
+  } else {
+    row('t-wx', '高德', '链接里没带 key, 跳过', 'wait');
+    log('amap: skipped(no key)');
+  }
+  WX.forEach(function (w) {
+    var cell = row('t-wx', w.name, '请求中', 'wait');
+    var s = performance.now();
+    timeout(fetch(w.url, { cache: 'no-store' }), 10000)
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (j) {
+        var ms = performance.now() - s, v = w.pick(j);
+        cell.textContent = Math.round(ms) + ' ms, ' + v; cell.className = 'ok';
+        log('wx ' + w.name + ': OK ' + Math.round(ms) + 'ms ' + v);
+      })
+      .catch(function (e) {
+        var ms = performance.now() - s;
+        cell.textContent = '失败: ' + e.message + ' (' + Math.round(ms) + ' ms)'; cell.className = 'bad';
+        log('wx ' + w.name + ': FAIL ' + e.message + ' ' + Math.round(ms) + 'ms');
+      });
+  });
+
+  // 4. 其他托管地址(1 像素图)
+  if (!HOSTS.length) row('t-hosts', '-', '未配置', 'wait');
+  HOSTS.forEach(function (h) {
+    if (h.url.indexOf(location.host) > -1) return;
+    var cell = row('t-hosts', h.name, '请求中', 'wait');
+    var s = performance.now(), im = new Image(), done = false;
+    var t = setTimeout(function () { if (done) return; done = true; cell.textContent = '超时 10 秒'; cell.className = 'bad'; log('host ' + h.name + ': TIMEOUT'); }, 10000);
+    im.onload = function () { if (done) return; done = true; clearTimeout(t); var ms = Math.round(performance.now() - s); cell.textContent = ms + ' ms'; cell.className = 'ok'; log('host ' + h.name + ': OK ' + ms + 'ms'); };
+    im.onerror = function () { if (done) return; done = true; clearTimeout(t); cell.textContent = '失败'; cell.className = 'bad'; log('host ' + h.name + ': FAIL'); };
+    im.src = h.url + '?t=' + Date.now();
+  });
+
+  // 5. 能力
+  var sdt = !!(window.CSS && CSS.supports && CSS.supports('animation-timeline: view()'));
+  var caps = [
+    ['IntersectionObserver', 'IntersectionObserver' in window],
+    ['CSS 滚动驱动动画', sdt],
+    ['position: sticky', !!(window.CSS && CSS.supports && CSS.supports('position', 'sticky'))],
+    ['减少动态效果已开', matchMedia('(prefers-reduced-motion: reduce)').matches],
+    ['深色模式', matchMedia('(prefers-color-scheme: dark)').matches],
+    ['屏幕宽度', window.innerWidth + ' px, DPR ' + (window.devicePixelRatio || 1)]
+  ];
+  caps.forEach(function (c) {
+    var v = typeof c[1] === 'boolean' ? (c[1] ? '有' : '没有') : c[1];
+    row('t-cap', c[0], v);
+    log('cap ' + c[0] + ': ' + v);
+  });
+
+  // 6. 滚动演示: 放大用 JS(rAF), 金色条优先 CSS 滚动驱动, 淡入用 IntersectionObserver
+  var big = document.getElementById('big'), stage = document.getElementById('stage');
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var ticking = false, bar = stage.querySelector('.bar');
+  function onScroll() {
+    if (ticking || reduce) return; ticking = true;
+    requestAnimationFrame(function () {
+      var r = stage.getBoundingClientRect();
+      var p = Math.min(1, Math.max(0, -r.top / (r.height - innerHeight)));
+      big.style.transform = 'scale(' + (1 + p * 0.6) + ')';
+      if (!sdt) bar.style.transform = 'scaleX(' + p + ')';
+      ticking = false;
+    });
+  }
+  addEventListener('scroll', onScroll, { passive: true });
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (es) {
+      es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { threshold: 0.3 });
+    document.querySelectorAll('.fade').forEach(function (el) { io.observe(el); });
+  } else {
+    document.querySelectorAll('.fade').forEach(function (el) { el.classList.add('in'); });
+  }
+
+  // 7. 复制
+  document.getElementById('copy').onclick = function () {
+    var ta = document.getElementById('out'), msg = document.getElementById('copied');
+    function fallback() { ta.removeAttribute('readonly'); ta.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.setAttribute('readonly', ''); msg.textContent = ok ? '已复制' : '复制没成功, 长按上面文本框全选复制'; }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(function () { msg.textContent = '已复制'; }, fallback);
+    else fallback();
+  };
+})();
+</script>
+</body>
+</html>
